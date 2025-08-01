@@ -18,6 +18,7 @@ text_chunks = text_split(extracted_data)
 embeddings = download_hugging_face_embeddings()
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
+
 index_name = "medical-chatbot"
 
 if index_name not in pc.list_indexes().names():
