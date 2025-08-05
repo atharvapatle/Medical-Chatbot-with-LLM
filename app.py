@@ -31,7 +31,7 @@ docsearch = PineconeVectorStore.from_existing_index(
     embedding=embeddings
 )
 
-
+#retriver
 retriever = docsearch.as_retriever(search_type="similarity", search_kwargs={"k":3})
 
 chatModel = ChatOpenAI(model="moonshotai/kimi-k2:free")
