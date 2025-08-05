@@ -30,7 +30,7 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
           IMAGE_TAG: latest
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .  
+          docker build --no-cache -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
@@ -52,10 +52,24 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
-      #run
+
+      # CRITICAL: Stop and remove existing containers
+      - name: Stop and remove existing containers
+        run: |
+          docker stop $(docker ps -q) 2>/dev/null || true
+          docker rm $(docker ps -aq) 2>/dev/null || true
+          docker system prune -f
+
+      # CRITICAL: Pull latest image
+      - name: Pull latest image
+        run: |
+          docker pull "${{ steps.login-ecr.outputs.registry }}"/"${{ secrets.ECR_REPO }}":latest
+
       - name: Run Docker Image to serve users
         run: |
           docker run -d \
+            --name medical-chatbot \
+            --restart unless-stopped \
             -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
             -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
             -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" \
@@ -64,3 +78,10 @@ jobs:
             -e OPENAI_API_BASE="${{ secrets.OPENAI_API_BASE }}" \
             -p 8080:8080 \
             "${{ steps.login-ecr.outputs.registry }}"/"${{ secrets.ECR_REPO }}":latest
+
+      # CRITICAL: Verify deployment success
+      - name: Verify deployment
+        run: |
+          sleep 10
+          docker ps
+          curl -f http://localhost:8080 || exit 1
