@@ -1,5 +1,4 @@
-from flask import Flask, render_template, jsonify, request, session
-from src.helper import download_hugging_face_embeddings
+from flask import Flask, render_template, request, session
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import ChatOpenAI
 from langchain.chains import create_retrieval_chain
@@ -7,48 +6,78 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from dotenv import load_dotenv
-from src.prompt import system_prompt
+from pinecone import Pinecone, ServerlessSpec
 import os
-import uuid   
+import uuid
 import secrets
 
+from src.helper import load_pdf, filter_to_minimal_docs, text_split, download_hugging_face_embeddings
+
+from src.prompt import system_prompt
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)  
+app.secret_key = secrets.token_hex(16)
 
 load_dotenv()
 
-PINECONE_API_KEY = os.environ.get('PINECONE_API_KEY')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+
+pc = Pinecone(api_key=PINECONE_API_KEY)
+
 
 embeddings = download_hugging_face_embeddings()
 
 index_name = "medical-chatbot"
-docsearch = PineconeVectorStore.from_existing_index(
-    index_name=index_name,
-    embedding=embeddings
-)
+
+if index_name not in pc.list_indexes().names():
+    print(f"Creating new index: {index_name}")
+    pc.create_index(
+        name=index_name,
+        dimension=384,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+    )
+    
+    print("Loading and processing documents...")
+    extracted_data = load_pdf("data/")
+    minimal_docs = filter_to_minimal_docs(extracted_data)
+    text_chunks = text_split(minimal_docs)
+    print(f"Created {len(text_chunks)} chunks from documents.")
+
+    print("Embedding documents and uploading to Pinecone...")
+    docsearch = PineconeVectorStore.from_documents(
+        documents=text_chunks,
+        embedding=embeddings,
+        index_name=index_name
+    )
+    print("Index created and populated successfully.")
+else:
+    print(f"Loading existing index: {index_name}")
+    docsearch = PineconeVectorStore.from_existing_index(
+        index_name=index_name,
+        embedding=embeddings
+    )
+    print("Index loaded successfully.")
 
 retriever = docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-
 chatModel = ChatOpenAI(model="openai/gpt-oss-20b:free")
-
-# Store chat histories for each session
 chat_histories = {}
 
 prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    MessagesPlaceholder(variable_name="history"), 
+    ("system", system_prompt), # <-- Used here!
+    MessagesPlaceholder(variable_name="history"),
     ("human", "{input}"),
 ])
 
-question_answer_chain = create_stuff_documents_chain(chatModel, prompt)
-rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+Youtube_chain = create_stuff_documents_chain(chatModel, prompt)
+rag_chain = create_retrieval_chain(retriever, Youtube_chain)
 
 @app.route("/")
-def index():
+def index_route():
     return render_template('chat.html')
 
 @app.route("/get", methods=["GET", "POST"])
@@ -58,30 +87,21 @@ def chat():
 
     session_id = session['session_id']
 
-    # Step 2: Create chat history for this session if not present
     if session_id not in chat_histories:
         chat_histories[session_id] = InMemoryChatMessageHistory()
 
     history = chat_histories[session_id]
-
-    # Step 3: Get user message
     msg = request.form["msg"]
-    print("User:", msg)
-
-    # Step 4: Add user message to history
     history.add_user_message(msg)
 
-    # Step 5: Run the RAG chain with current history
     response = rag_chain.invoke({
         "input": msg,
-        "history": history.messages  # pass conversation so far
+        "history": history.messages
     })
 
-    # Step 6: Add AI response to history
     ai_answer = response["answer"]
     history.add_ai_message(ai_answer)
 
-    print("AI:", ai_answer)
     return str(ai_answer)
 
 if __name__ == '__main__':
