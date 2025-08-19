@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, session
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import ChatOpenAI
+from langchain_cerebras import ChatCerebras
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -64,7 +65,7 @@ else:
     print("Index loaded successfully.")
 
 retriever = docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-chatModel = ChatOpenAI(model="openai/gpt-oss-20b:free")
+chatModel = ChatCerebras(model="llama-3.3-70b")
 chat_histories = {}
 
 prompt = ChatPromptTemplate.from_messages([
